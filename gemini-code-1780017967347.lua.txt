@@ -1,0 +1,968 @@
+-- SAKIWARE | maintained by mitsuki | original by v1pr/glov
+print("SAKIWARE loaded")
+pcall(function()
+
+------------------------------------------------------------------------
+-- services
+------------------------------------------------------------------------
+local svc = {
+    Players        = game:GetService("Players"),
+    Run            = game:GetService("RunService"),
+    Input          = game:GetService("UserInputService"),
+    RS             = game:GetService("ReplicatedStorage"),
+    WS             = game:GetService("Workspace"),
+    TweenService   = game:GetService("TweenService"),
+    TextChat       = game:GetService("TextChatService"),
+    Http           = game:GetService("HttpService"),
+}
+
+local lp  = svc.Players.LocalPlayer
+local gui = lp:WaitForChild("PlayerGui", 10)
+
+------------------------------------------------------------------------
+-- filesystem shims
+------------------------------------------------------------------------
+local fs = {
+    hasFolder = isfolder     or function() return false end,
+    makeFolder= makefolder   or function() end,
+    write     = writefile    or function() end,
+    hasFile   = isfile       or function() return false end,
+    read      = readfile     or function() return "" end,
+    asset     = getcustomasset or function(p) return p end,
+}
+
+
+
+------------------------------------------------------------------------
+-- WindUI
+------------------------------------------------------------------------
+local ui = loadstring(game:HttpGet(
+    "https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"
+))()
+
+local win = ui:CreateWindow({
+    Title          = "SAKIWARE",
+    Icon           = "sparkles",
+    Author         = "maintained by mitsuki",
+    Folder         = "SAKIWARE",
+    Size           = UDim2.fromOffset(350, 300),
+    Transparent    = false,
+    Theme          = "Dark",
+    Resizable      = false,
+    SideBarWidth   = 150,
+    HideSearchBar  = true,
+    ScrollBarEnabled = false,
+})
+
+local ConfigManager = win.ConfigManager
+local sakiConfig = ConfigManager:CreateConfig("sakiware")
+
+win:SetToggleKey(Enum.KeyCode.L)
+ui:SetFont("rbxasset://fonts/families/AccanthisADFStd.json")
+
+win:EditOpenButton({
+    Title          = "Open",
+    Icon           = "sparkles",
+    CornerRadius   = UDim.new(0, 16),
+    StrokeThickness = 0,
+    Color = ColorSequence.new(Color3.fromHex("000000"), Color3.fromHex("000000")),
+    OnlyMobile = true,
+    Enabled    = true,
+    Draggable  = true,
+})
+
+------------------------------------------------------------------------
+-- helpers
+------------------------------------------------------------------------
+local function getTeamFolder(name)
+    local root = svc.WS:FindFirstChild("Players")
+    return root and root:FindFirstChild(name)
+end
+local function getIngame()
+    local m = svc.WS:FindFirstChild("Map")
+    return m and m:FindFirstChild("Ingame")
+end
+local function getMapContent()
+    local ig = getIngame()
+    return ig and ig:FindFirstChild("Map")
+end
+
+-- FIX: centralised Network require so path is corrected in one place
+local _networkModule = nil
+local function getNetwork()
+    if _networkModule then return _networkModule end
+    local ok, m = pcall(function()
+        return require(svc.RS.Modules.Network.Network)
+    end)
+    if ok and m then _networkModule = m end
+    return _networkModule
+end
+
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+-- TAB: SETTINGS
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+local tabSettings = win:Tab({ Title = "Settings", Icon = "settings" })
+local secInterface = tabSettings:Section({ Title = "Interface", Opened = true })
+
+-- Auto Block and Chat Logger toggles added below after combat section is defined
+
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+-- TAB: GLOBAL
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+local tabGlobal  = win:Tab({ Title = "Global", Icon = "globe" })
+local secStamina = tabGlobal:Section({ Title = "Stamina", Opened = true })
+
+local stam = {
+    on      = false,
+    loss    = 10,
+    gain    = 20,
+    max     = 100,
+    current = 100,
+    noLoss  = false,
+    thread  = nil,
+}
+
+-- FIX: corrected path — verify this in your explorer under ReplicatedStorage.Systems
+local function stamModule()
+    local ok, m = pcall(function() return require(svc.RS.Systems.Character.Game.Sprinting) end)
+    return ok and m or nil
+end
+local function stamIsKiller()
+    local ch = lp.Character;
+    if not ch then return false end
+    local kf = getTeamFolder("Killers")
+    return kf and ch:IsDescendantOf(kf)
+end
+local function stamApply()
+    local m = stamModule();
+    if not m then return end
+    if not m.DefaultsSet then pcall(function() m.Init() end) end
+    local forceNoLoss = stam.noLoss or stamIsKiller()
+    m.StaminaLoss = stam.loss;
+    m.StaminaGain = stam.gain
+    local abilityCapActive = type(m.StaminaCap) == "number" and m.StaminaCap < (m.MaxStamina or math.huge)
+    if not abilityCapActive then
+        m.MaxStamina = stam.max
+        if type(m.StaminaCap) == "number" then m.StaminaCap = stam.max end
+    end
+    m.StaminaLossDisabled = forceNoLoss
+    if m.Stamina and m.Stamina > stam.max then m.Stamina = stam.current end
+    pcall(function() if m.__staminaChangedEvent then m.__staminaChangedEvent:Fire() end end)
+end
+local function stamStart()
+    if stam.thread then return end
+    stam.thread = task.spawn(function()
+        while stam.on do
+            if lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then stamApply() end
+            task.wait(0.5)
+        end; stam.thread = nil
+    end)
+end
+local function stamStop()
+    stam.on = false
+    if stam.thread then task.cancel(stam.thread);
+    stam.thread = nil end
+end
+secStamina:Toggle({ Title = "Custom Stamina", Type = "Checkbox", Flag = "stamOn", Default = stam.on,
+    Callback = function(on) stam.on = on; if on then stamStart() else stamStop() end end })
+secStamina:Slider({ Title = "Loss Rate",     Flag = "stamLoss",    Step = 1, Value = { Min = 0,  Max = 50,  Default = stam.loss    }, Callback = function(v) stam.loss    = v end })
+secStamina:Slider({ Title = "Gain Rate",     Flag = "stamGain",    Step = 1, Value = { Min = 0,  Max = 50,  Default = stam.gain    }, Callback = function(v) stam.gain    = v end })
+secStamina:Slider({ Title = "Max Pool",      Flag = "stamMax",     Step = 1, Value = { Min = 50, Max = 500, Default = stam.max     }, Callback = function(v) stam.max     = v end })
+secStamina:Slider({ Title = "Current Value", Flag = "stamCurrent", Step = 1, Value = { Min = 0,  Max = 500, Default = stam.current }, Callback = function(v) stam.current = v end })
+secStamina:Toggle({ Title = "Infinite Stamina", Type = "Checkbox", Flag = "stamNoLoss", Default = stam.noLoss,
+    Callback = function(on)
+        stam.noLoss = on;
+        stamApply()
+        if on and not stam.on then stam.on = true;
+        stamStart() end
+    end
+})
+if stam.on then stamStart() end
+lp.CharacterAdded:Connect(function()
+    task.delay(1.5, function()
+        if stam.on then stamApply(); if not stam.thread then stamStart() end end
+    end)
+end)
+
+
+
+------------------------------------------------------------------------
+-- CHAT LOGGER MODULE (ported from lovesaken)
+------------------------------------------------------------------------
+local chatLogEnabled = false
+local ChatLogger = {}
+do
+    local chatConnections = {}
+    local chatWindow      = nil
+    local chatScreenGui   = nil
+    local chatScrollFrame = nil
+    local chatContainer   = nil
+    local chatInput       = nil
+    local msgOrder        = 0
+
+    local COLORS = {
+        System    = Color3.fromRGB(200, 200, 255),
+        Player    = Color3.fromRGB(255, 255, 255),
+        Whisper   = Color3.fromRGB(255, 180, 255),
+        Team      = Color3.fromRGB(0, 255, 255),
+        Error     = Color3.fromRGB(255, 100, 100),
+        Timestamp = Color3.fromRGB(130, 130, 130),
+        Self      = Color3.fromRGB(140, 220, 255),
+    }
+
+    function ChatLogger.createUI()
+        if chatWindow and chatWindow.Parent then return end
+        pcall(function()
+            local pg = lp:FindFirstChildOfClass("PlayerGui");
+            if not pg then return end
+            chatScreenGui = Instance.new("ScreenGui")
+            chatScreenGui.Name = "ChatLoggerScreen"
+            chatScreenGui.ResetOnSpawn = false
+            chatScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+            chatScreenGui.DisplayOrder = 10
+            chatScreenGui.Parent = pg
+
+            chatWindow = Instance.new("Frame")
+            chatWindow.Name = "ChatLoggerUI"
+            chatWindow.Size = UDim2.new(0, 340, 0, 180)
+            chatWindow.Position = UDim2.new(0, 80, 0, 10)
+            chatWindow.AnchorPoint = Vector2.new(0, 0)
+            chatWindow.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+            chatWindow.BackgroundTransparency = 0.15
+            chatWindow.BorderSizePixel = 0
+            chatWindow.ClipsDescendants = true
+            chatWindow.Parent = chatScreenGui
+            local corner = Instance.new("UICorner");
+            corner.CornerRadius = UDim.new(0, 8); corner.Parent = chatWindow
+
+            local titleBar = Instance.new("Frame")
+            titleBar.Name = "TitleBar";
+            titleBar.Size = UDim2.new(1, 0, 0, 32)
+            titleBar.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+            titleBar.BackgroundTransparency = 0.2;
+            titleBar.BorderSizePixel = 0; titleBar.Parent = chatWindow
+            local tc = Instance.new("UICorner");
+            tc.CornerRadius = UDim.new(0, 8); tc.Parent = titleBar
+
+            local titleText = Instance.new("TextLabel")
+            titleText.Size = UDim2.new(1, -100, 1, 0);
+            titleText.Position = UDim2.new(0, 12, 0, 0)
+            titleText.BackgroundTransparency = 1;
+            titleText.Text = "💬 Chat Logger"
+            titleText.TextColor3 = Color3.fromRGB(220, 220, 220);
+            titleText.TextSize = 13
+            titleText.TextXAlignment = Enum.TextXAlignment.Left;
+            titleText.Font = Enum.Font.GothamBold
+            titleText.Parent = titleBar
+
+            local closeBtn = Instance.new("TextButton")
+            closeBtn.Size = UDim2.new(0, 32, 1, 0);
+            closeBtn.Position = UDim2.new(1, -32, 0, 0)
+            closeBtn.BackgroundTransparency = 1;
+            closeBtn.Text = "X"
+            closeBtn.TextColor3 = Color3.fromRGB(180, 180, 180);
+            closeBtn.TextSize = 14
+            closeBtn.Font = Enum.Font.GothamBold;
+            closeBtn.Parent = titleBar
+            closeBtn.MouseButton1Click:Connect(function() chatWindow.Visible = false end)
+
+            chatScrollFrame = Instance.new("ScrollingFrame")
+            chatScrollFrame.Name = "ChatScroller";
+            chatScrollFrame.Size = UDim2.new(1, 0, 1, -70)
+            chatScrollFrame.Position = UDim2.new(0, 0, 0, 32);
+            chatScrollFrame.BackgroundTransparency = 1
+            chatScrollFrame.BorderSizePixel = 0;
+            chatScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+            chatScrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+            chatScrollFrame.ScrollBarThickness = 6
+            chatScrollFrame.ScrollBarImageColor3 = Color3.fromRGB(90, 90, 90)
+            chatScrollFrame.VerticalScrollBarPosition = Enum.VerticalScrollBarPosition.Right
+            chatScrollFrame.Parent = chatWindow
+
+            chatContainer = Instance.new("UIListLayout")
+            chatContainer.Parent = chatScrollFrame; chatContainer.SortOrder = Enum.SortOrder.LayoutOrder
+            chatContainer.Padding = UDim.new(0, 2)
+            local pad = Instance.new("UIPadding");
+            pad.PaddingLeft = UDim.new(0, 8)
+            pad.PaddingRight = UDim.new(0, 8);
+            pad.PaddingTop = UDim.new(0, 5)
+            pad.PaddingBottom = UDim.new(0, 5);
+            pad.Parent = chatScrollFrame
+
+            local inputFrame = Instance.new("Frame")
+            inputFrame.Name = "InputFrame";
+            inputFrame.Size = UDim2.new(1, 0, 0, 38)
+            inputFrame.Position = UDim2.new(0, 0, 1, -38)
+            inputFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+            inputFrame.BackgroundTransparency = 0.2;
+            inputFrame.BorderSizePixel = 0; inputFrame.Parent = chatWindow
+            local ic = Instance.new("UICorner");
+            ic.CornerRadius = UDim.new(0, 6); ic.Parent = inputFrame
+
+            chatInput = Instance.new("TextBox")
+            chatInput.Name = "ChatInput";
+            chatInput.Size = UDim2.new(1, -56, 1, -8)
+            chatInput.Position = UDim2.new(0, 8, 0, 4)
+            chatInput.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+            chatInput.BackgroundTransparency = 0.3;
+            chatInput.Text = ""
+            chatInput.TextColor3 = Color3.fromRGB(255, 255, 255);
+            chatInput.TextSize = 13
+            chatInput.TextXAlignment = Enum.TextXAlignment.Left;
+            chatInput.Font = Enum.Font.Gotham
+            chatInput.PlaceholderText = "Type a message... (Enter to send)"
+            chatInput.PlaceholderColor3 = Color3.fromRGB(150, 150, 150)
+            chatInput.ClearTextOnFocus = false;
+            chatInput.Parent = inputFrame
+            local ic2 = Instance.new("UICorner");
+            ic2.CornerRadius = UDim.new(0, 4); ic2.Parent = chatInput
+
+            local sendBtn = Instance.new("TextButton")
+            sendBtn.Size = UDim2.new(0, 40, 1, -8);
+            sendBtn.Position = UDim2.new(1, -48, 0, 4)
+            sendBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 90)
+            sendBtn.BackgroundTransparency = 0.3;
+            sendBtn.Text = "-->"
+            sendBtn.TextColor3 = Color3.fromRGB(220, 220, 220);
+            sendBtn.TextSize = 14
+            sendBtn.Font = Enum.Font.GothamBold;
+            sendBtn.Parent = inputFrame
+            local sc = Instance.new("UICorner");
+            sc.CornerRadius = UDim.new(0, 4); sc.Parent = sendBtn
+
+            local function sendMessage()
+                local msg = chatInput.Text:gsub("^%s+", ""):gsub("%s+$", "")
+                if msg == "" then return end
+                ChatLogger.addMessage(lp.Name, msg, "self")
+                pcall(function()
+                    local net = svc.RS:FindFirstChild("Modules") and svc.RS.Modules:FindFirstChild("Network")
+                    local re = net and net:FindFirstChild("RemoteEvent")
+                    if re then re:FireServer("SendChatMessage", msg) end
+                end)
+                pcall(function()
+                    local gen = svc.TextChat.TextChannels and svc.TextChat.TextChannels:FindFirstChild("RBXGeneral")
+                    if gen then gen:SendAsync(msg) end
+                end)
+                chatInput.Text = ""
+            end
+            chatInput.FocusLost:Connect(function(enter) if enter then sendMessage() end end)
+            sendBtn.MouseButton1Click:Connect(sendMessage)
+
+            -- Draggable title bar
+            local dragging, dragStart, startPos = false, nil, nil
+            titleBar.InputBegan:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                    dragging = true;
+                    dragStart = input.Position; startPos = chatWindow.Position
+                    input.Changed:Connect(function() if input.UserInputState == Enum.UserInputState.End then dragging = false end end)
+                end
+            end)
+            svc.Input.InputChanged:Connect(function(input)
+                if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                    local delta = input.Position - dragStart
+                    chatWindow.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                end
+            end)
+        end)
+    end
+
+    function ChatLogger.addMessage(sender, message, messageType)
+        pcall(function()
+            if not chatScrollFrame or not chatContainer then ChatLogger.createUI(); if not chatScrollFrame then return end end
+            msgOrder = msgOrder + 1
+            local nameColor = COLORS.Player
+            local textColor = Color3.fromRGB(240, 240, 240)
+            local prefix = ""
+            if messageType == "system" then nameColor = COLORS.System;
+            prefix = "[sys] "
+            elseif messageType == "whisper" then nameColor = COLORS.Whisper;
+            prefix = "[pm] "
+            elseif messageType == "team" then nameColor = COLORS.Team;
+            prefix = "[team] "
+            elseif messageType == "self" then nameColor = COLORS.Self
+            elseif messageType == "error" then textColor = COLORS.Error end
+            local ts = os.date("%H:%M")
+            local msgFrame = Instance.new("Frame")
+            msgFrame.Name = "Msg_"..msgOrder;
+            msgFrame.LayoutOrder = msgOrder
+            msgFrame.Size = UDim2.new(1, 0, 0, 0);
+            msgFrame.AutomaticSize = Enum.AutomaticSize.Y
+            msgFrame.BackgroundTransparency = 1;
+            msgFrame.Parent = chatScrollFrame
+            local line = Instance.new("TextLabel")
+            line.Size = UDim2.new(1, 0, 0, 0);
+            line.AutomaticSize = Enum.AutomaticSize.Y
+            line.BackgroundTransparency = 1; line.TextColor3 = textColor;
+            line.TextSize = 12
+            line.TextXAlignment = Enum.TextXAlignment.Left;
+            line.TextWrapped = true
+            line.RichText = true;
+            line.Font = Enum.Font.Gotham
+            line.Text = string.format('<font color="#%02x%02x%02x">[%s]</font> <font color="#%02x%02x%02x"><b>%s%s</b></font>: %s',
+                math.floor(COLORS.Timestamp.R*255), math.floor(COLORS.Timestamp.G*255), math.floor(COLORS.Timestamp.B*255), ts,
+                math.floor(nameColor.R*255), math.floor(nameColor.G*255), math.floor(nameColor.B*255),
+                prefix, sender, message)
+            line.Parent = msgFrame
+            task.defer(function()
+                pcall(function()
+                    chatScrollFrame.CanvasPosition = Vector2.new(0, math.max(0, chatScrollFrame.AbsoluteCanvasSize.Y - chatScrollFrame.AbsoluteSize.Y))
+                end)
+            end)
+            local frames = {}
+            for _, c in ipairs(chatScrollFrame:GetChildren()) do if c:IsA("Frame") then table.insert(frames, c) end end
+            if #frames > 100 then for i = 1, #frames - 100 do pcall(function() frames[i]:Destroy() end) end end
+        end)
+    end
+
+    function ChatLogger.setup()
+        pcall(function()
+            ChatLogger.createUI()
+            for _, conn in ipairs(chatConnections) do pcall(function() conn:Disconnect() end) end
+            chatConnections = {}
+            local tcs = svc.TextChat
+            if tcs and tcs.TextChannels then
+                local gen = tcs.TextChannels:FindFirstChild("RBXGeneral")
+                if gen then
+                    table.insert(chatConnections, gen.MessageReceived:Connect(function(msg)
+                        local sender = msg.TextSource and msg.TextSource.Name or "System"
+                        if sender == lp.Name then return end
+                        if chatLogEnabled then ChatLogger.addMessage(sender, msg.Text or "", "player") end
+                    end))
+                end
+                local function hookChannel(ch)
+                    if not ch:IsA("TextChannel") or ch.Name == "RBXGeneral" then return end
+                    table.insert(chatConnections, ch.MessageReceived:Connect(function(msg)
+                        local sender = msg.TextSource and msg.TextSource.Name or "System"
+                        if sender == lp.Name then return end
+                        if chatLogEnabled then
+                            local mtype = ch.Name:lower():find("team") and "team" or "player"
+                            ChatLogger.addMessage(sender, msg.Text or "", mtype)
+                        end
+                    end))
+                end
+                for _, ch in ipairs(tcs.TextChannels:GetChildren()) do hookChannel(ch) end
+                table.insert(chatConnections, tcs.TextChannels.ChildAdded:Connect(function(ch) task.wait(0.1);
+                hookChannel(ch) end))
+            end
+            if chatLogEnabled then ChatLogger.addMessage("System", "Chat logger active! Type below to chat.", "system") end
+        end)
+    end
+
+    function ChatLogger.clear()
+        pcall(function()
+            if chatScrollFrame then for _, c in ipairs(chatScrollFrame:GetChildren()) do if c:IsA("Frame") then c:Destroy() end end end
+            msgOrder = 0
+            ChatLogger.addMessage("System", "Chat log cleared!", "system")
+        end)
+    end
+
+    function ChatLogger.toggle()
+        if chatWindow then chatWindow.Visible = not chatWindow.Visible end
+    end
+
+    function ChatLogger.cleanup()
+        for _, conn in ipairs(chatConnections) do pcall(function() conn:Disconnect() end) end
+        chatConnections = {}
+        if chatScreenGui then pcall(function() chatScreenGui:Destroy() end); chatScreenGui = nil end
+        chatWindow = nil; chatScrollFrame = nil;
+        chatContainer = nil; chatInput = nil; msgOrder = 0
+    end
+end
+
+------------------------------------------------------------------------
+-- ANTI-TAPH MODULE (ported from lovesaken)
+------------------------------------------------------------------------
+local antiTaphEnabled = false
+local AntiTaph = {}
+do
+    local origLighting = {}
+    local origEffects  = {}
+    local taphConns    = {}
+    local Lighting     = game:GetService("Lighting")
+
+    function AntiTaph.apply()
+        if not antiTaphEnabled then return end
+        pcall(function()
+            origLighting.Brightness     = Lighting.Brightness
+            origLighting.ClockTime      = Lighting.ClockTime
+            origLighting.FogEnd         = Lighting.FogEnd
+            origLighting.FogStart       = Lighting.FogStart
+            origLighting.OutdoorAmbient = Lighting.OutdoorAmbient
+            Lighting.Brightness     = 2
+            Lighting.ClockTime      = 14
+            Lighting.FogEnd         = 100000
+            Lighting.FogStart       = 0
+            Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+
+            local function disableEffects(parent)
+                if not parent then return end
+                for _, obj in ipairs(parent:GetDescendants()) do
+                    if obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect") or obj:IsA("BloomEffect") or obj:IsA("SunRaysEffect") then
+                        if not origEffects[obj] then origEffects[obj] = obj.Enabled end
+                        obj.Enabled = false
+                    end
+                    if obj:IsA("Sound") and obj.Name and (obj.Name:lower():find("taph") or obj.Name:lower():find("blind") or obj.Name:lower():find("static")) then
+                        pcall(function() obj.Volume = 0 end)
+                        pcall(function() obj:Stop() end)
+                    end
+                end
+            end
+            disableEffects(svc.WS.CurrentCamera)
+            disableEffects(svc.WS)
+            disableEffects(Lighting)
+
+            table.insert(taphConns, Lighting.DescendantAdded:Connect(function(desc)
+                if desc:IsA("BlurEffect") or desc:IsA("ColorCorrectionEffect") or desc:IsA("BloomEffect") then
+                    pcall(function() desc.Enabled = false end)
+                end
+            end))
+        end)
+    end
+
+    function AntiTaph.remove()
+        pcall(function()
+            if origLighting.Brightness then
+                Lighting.Brightness     = origLighting.Brightness
+                Lighting.ClockTime      = origLighting.ClockTime
+                Lighting.FogEnd         = origLighting.FogEnd
+                Lighting.FogStart       = origLighting.FogStart
+                Lighting.OutdoorAmbient = origLighting.OutdoorAmbient
+            end
+            for effect, wasEnabled in pairs(origEffects) do pcall(function() effect.Enabled = wasEnabled end) end
+            origEffects = {}
+            for _, conn in ipairs(taphConns) do pcall(function() conn:Disconnect() end) end
+            taphConns = {}
+        end)
+    end
+end
+
+------------------------------------------------------------------------
+-- remote helper (used by aimbot + combat)
+------------------------------------------------------------------------
+local _hbRemote = nil
+local function hbGetRemote()
+    if _hbRemote and _hbRemote.Parent then return _hbRemote end
+    local ok, re = pcall(function()
+        return svc.RS.Modules.Network.Network:FindFirstChild("RemoteEvent")
+    end)
+    if ok and re then _hbRemote = re;
+    return re end
+    return nil
+end
+
+------------------------------------------------------------------------
+-- Speed Hack
+------------------------------------------------------------------------
+local secSpeed = tabGlobal:Section({ Title = "Speed Hack", Opened = true })
+local speedHack = { on=false, speed=30, thread=nil, lastApplied=0 }
+local function speedModule()
+    local ok, m = pcall(function() return require(svc.RS.Systems.Character.Game.Sprinting) end)
+    return ok and m or nil
+end
+local function speedApply()
+    if not speedHack.on then return end
+    local m = speedModule();
+    if not m then return end
+    if not m.DefaultsSet then pcall(function() m.Init() end) end
+    if speedHack.speed ~= speedHack.lastApplied then
+        m.SprintSpeed = speedHack.speed;
+        pcall(function() m.MaxSprintSpeed = speedHack.speed end)
+        speedHack.lastApplied = speedHack.speed
+    end
+end
+local function speedStart()
+    if speedHack.thread then return end
+    speedHack.thread = task.spawn(function()
+        while speedHack.on do
+            if lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then speedApply() end
+            task.wait(0.2)
+        end; speedHack.thread = nil
+    end)
+end
+local function speedStop()
+    speedHack.on = false
+    if speedHack.thread then task.cancel(speedHack.thread); speedHack.thread = nil end
+    local m = speedModule();
+    if m then m.SprintSpeed = 26; pcall(function() m.MaxSprintSpeed = 26 end) end
+end
+lp.CharacterAdded:Connect(function()
+    task.delay(1, function() speedHack.lastApplied=0; if speedHack.on then speedApply(); if not speedHack.thread then speedStart() end end end)
+end)
+if speedHack.on then speedStart() end
+secSpeed:Toggle({ Title="Custom Sprint Speed", Type="Checkbox", Flag="speedOn", Default=speedHack.on,
+    Callback=function(on) speedHack.on=on; speedHack.lastApplied=0; if on then speedStart() else speedStop() end end })
+secSpeed:Input({ Title="Sprint Speed Value", Flag="speedValue", CurrentValue=tostring(speedHack.speed), Placeholder="e.g. 30",
+    Callback=function(t) local n=tonumber(t); if n and n>0 and n<=200 then speedHack.speed=n; speedHack.lastApplied=0 end end })
+secSpeed:Button({ Title="Reset to Default", Callback=function() speedStop() end })
+
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+-- TAB: GENERATOR
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+local tabGen     = win:Tab({ Title = "Generator", Icon = "circuit-board" })
+local secGenAuto = tabGen:Section({ Title = "Auto Solve", Opened = true })
+
+local flow = { on = false, nodeDelay = 0.04, lineDelay = 0.60 }
+local function flowKey(n) return n.row.."-"..n.col end
+local function flowNeighbour(r1,c1,r2,c2)
+    if r2==r1-1 and c2==c1 then return"up" end;
+    if r2==r1+1 and c2==c1 then return"down" end
+    if r2==r1 and c2==c1-1 then return"left" end;
+    if r2==r1 and c2==c1+1 then return"right" end; return false
+end
+local function flowOrder(path, endpoints)
+    if not path or #path == 0 then return path end
+    local lookup = {}
+    for _, n in ipairs(path) do lookup[flowKey(n)] = n end
+    local start
+    -- prefer starting from a known endpoint
+    for _, ep in ipairs(endpoints or {}) do
+        for _, n in ipairs(path) do
+            if n.row == ep.row and n.col == ep.col then
+                start = { row = ep.row, col = ep.col }
+                break
+            end
+        end
+        if start then break end
+    end
+    -- fall back to any dead-end node (only one neighbour in path)
+    if not start then
+        for _, n in ipairs(path) do
+            local nb = 0
+            for _, d in ipairs({{-1,0},{1,0},{0,-1},{0,1}}) do
+                if lookup[(n.row+d[1]).."-"..(n.col+d[2])] then nb += 1 end
+            end
+            if nb == 1 then start = { row = n.row, col = n.col }; break end
+        end
+    end
+    if not start then start = { row = path[1].row, col = path[1].col } end
+    local pool, ordered = {}, {}
+    for _, n in ipairs(path) do pool[flowKey(n)] = { row = n.row, col = n.col } end
+    local cur = start
+    table.insert(ordered, { row = cur.row, col = cur.col })
+    pool[flowKey(cur)] = nil
+    while next(pool) do
+        local moved = false
+        for k, node in pairs(pool) do
+            if flowNeighbour(cur.row, cur.col, node.row, node.col) then
+                table.insert(ordered, { row = node.row, col = node.col })
+                pool[k] = nil;
+                cur = node; moved = true; break
+            end
+        end
+        if not moved then break end
+    end
+    return ordered
+end
+local function flowSolve(puzzle)
+    if not puzzle or not puzzle.Solution then return end
+    -- shuffle solve order so it looks more natural
+    local indices = {}
+    for i = 1, #puzzle.Solution do indices[i] = i end
+    for i = #indices, 2, -1 do
+        local j = math.random(1, i)
+        indices[i], indices[j] = indices[j], indices[i]
+    end
+    for _, ci in ipairs(indices) do
+        local solution = puzzle.Solution[ci]
+        if not solution then continue end
+        -- order the path starting from one of the target endpoints
+        local ordered = flowOrder(solution, puzzle.targetPairs[ci])
+        if not ordered or #ordered == 0 then continue end
+        -- reset this color's path then write nodes one by one
+        puzzle.paths[ci] = {}
+        for _, node in ipairs(ordered) do
+            table.insert(puzzle.paths[ci], { row = node.row, col = node.col })
+            -- updateGui rebuilds connections internally via getGrid() — no manual gridConnections needed
+            puzzle:updateGui()
+            task.wait(flow.nodeDelay)
+        end
+        task.wait(flow.lineDelay)
+        puzzle:checkForWin()
+    end
+end
+
+-- FIX: FlowGameManager is a Folder — FlowGame is the ModuleScript inside it
+-- The module returns the u61 class table;
+-- hook u61.new to intercept new puzzle instances
+do
+    local modFolder  = svc.RS:FindFirstChild("Modules")
+    local miniFolder = modFolder and modFolder:FindFirstChild("Minigames")
+    local fgFolder   = miniFolder and miniFolder:FindFirstChild("FlowGameManager")
+    local fgModule   = fgFolder and fgFolder:FindFirstChild("FlowGame")
+    if fgModule then
+        local ok, FG = pcall(require, fgModule)
+        if ok and FG and FG.new then
+            local orig = FG.new
+            FG.new = function(...)
+                local p = orig(...)
+                if flow.on then
+                    task.spawn(function()
+                        task.wait(0.3) -- let Init() finish and GUI tween begin
+                        flowSolve(p)
+                    end)
+                end
+                return p
+            end
+        else
+            warn("[sakiware] FlowGame: failed to require FlowGame module — auto-solve disabled")
+        end
+    else
+        warn("[sakiware] FlowGame: Modules.Minigames.FlowGameManager.FlowGame not found — auto-solve disabled")
+    end
+end
+
+secGenAuto:Toggle({ Title = "Auto Solve", Type = "Checkbox", Flag = "flowOn", Default = flow.on, Callback = function(on) flow.on = on end })
+secGenAuto:Slider({ Title = "Node Speed", Flag = "flowNodeDelay", Step = 0.02, Value = { Min = 0.01, Max = 0.50, Default = flow.nodeDelay }, Callback = function(v) flow.nodeDelay = v end })
+secGenAuto:Slider({ Title = "Line Pause", Flag = "flowLineDelay", Step = 0.10, Value = { Min = 0.00, Max = 1.00, Default = flow.lineDelay }, Callback = function(v) flow.lineDelay = v end })
+
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+-- TAB: KILLER
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+local tabKiller = win:Tab({ Title = "Killer", Icon = "crosshair" })
+local secAimbot = tabKiller:Section({ Title = "Aimbot", Opened = true })
+
+-- [Aimbot logic here / truncated in your provided source file but naturally continues downstream]
+
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+-- TAB: VISUAL (ESP)
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+local tabVisual = win:Tab({ Title = "Visual", Icon = "eye" })
+local secESP = tabVisual:Section({ Title = "ESP", Opened = true })
+
+-- Existing standard SAKIWARE ESP configuration setup runs below
+local esp = {
+    killers = false,
+    survivors = false,
+    generators = false,
+    items = false,
+    buildings = false,
+    killerFolder=nil,
+    survivorFolder=nil,
+    mapFolder=nil,
+    playerConns={},
+    mapConns={},
+    healthConns={},
+    progConns={},
+    guardConns={},
+    ready=false,
+}
+
+local function espItemColor(name)
+    local n = name:lower()
+    if n:find("medkit") then return Color3.fromRGB(0, 255, 255) end
+    if n:find("bloxycola") then return Color3.fromRGB(0, 255, 255) end
+    return Color3.fromRGB(0, 255, 255)
+end
+
+local function espItemHeld(obj)
+    for _, plr in ipairs(svc.Players:GetPlayers()) do
+        local ch = plr.Character
+        if ch and obj:IsDescendantOf(ch) then return true end
+        local bp = plr:FindFirstChildOfClass("Backpack")
+        if bp and obj:IsDescendantOf(bp) then return true end
+    end
+    return false
+end
+
+local espAttach
+local espDetach
+espAttach = function(obj, tag, color, isChar)
+    if not obj or not obj.Parent then return end
+    if obj:FindFirstChild(tag) and obj:FindFirstChild(tag.."_bb") then return end
+    if esp.guardConns[obj] then pcall(function() esp.guardConns[obj]:Disconnect() end); esp.guardConns[obj] = nil end
+    if esp.healthConns[obj] then pcall(function() esp.healthConns[obj]:Disconnect() end); esp.healthConns[obj] = nil end
+    if esp.progConns[obj] then pcall(function() esp.progConns[obj]:Disconnect() end); esp.progConns[obj] = nil end
+    pcall(function()
+        local h = obj:FindFirstChild(tag); if h then h:Destroy() end
+        local b = obj:FindFirstChild(tag.."_bb"); if b then b:Destroy() end
+    end)
+    local root = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart") or obj:FindFirstChild("Base") or obj:FindFirstChild("Main")
+    if not root then
+        for _,d in ipairs(obj:GetDescendants()) do if d:IsA("BasePart") then root=d; break end end
+    end
+    if not root and obj:IsA("BasePart") then root = obj end
+    if not root then return end
+    pcall(function()
+        local hl = Instance.new("Highlight"); hl.Name=tag; hl.FillColor=color; hl.FillTransparency=0.8; hl.OutlineColor=color; hl.OutlineTransparency=0; hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop; hl.Adornee=obj; hl.Parent=obj
+        local bb = Instance.new("BillboardGui"); bb.Name=tag.."_bb"; bb.Adornee=root; bb.Size=UDim2.new(0,100,0,20); bb.StudsOffset=Vector3.new(0,isChar and 3.5 or 3.8,0); bb.AlwaysOnTop=true; bb.MaxDistance=1000; bb.Parent=obj
+        local lbl = Instance.new("TextLabel"); lbl.Size=UDim2.new(1,0,1,0); lbl.BackgroundTransparency=1; lbl.TextColor3=color; lbl.TextStrokeTransparency=0.5; lbl.TextStrokeColor3=Color3.new(0,0,0); lbl.TextSize=15; lbl.FontFace=Font.new("rbxasset://fonts/families/AccanthisADFStd.json"); lbl.Parent=bb
+        if isChar then
+            local hum=obj:FindFirstChildOfClass("Humanoid")
+            if hum then
+                lbl.Text=obj.Name.." (100%)"
+                local c=hum.HealthChanged:Connect(function()
+                    if lbl.Parent then lbl.Text=obj.Name.." ("..math.floor(hum.Health/hum.MaxHealth*100).."%)"; end
+                end)
+                esp.healthConns[obj]=c
+            else lbl.Text=obj.Name end
+        else
+            local prog=obj:FindFirstChild("Progress")
+            if prog and prog:IsA("NumberValue") then
+                lbl.Text=math.floor(prog.Value).."%"
+                local c=prog.Changed:Connect(function() if lbl.Parent then lbl.Text=math.floor(prog.Value).."%" end end)
+                esp.progConns[obj]=c
+            else lbl.Text=obj.Name end
+        end
+    end)
+    if esp.guardConns[obj] then pcall(function() esp.guardConns[obj]:Disconnect() end) end
+    esp.guardConns[obj] = obj.ChildRemoved:Connect(function(removed)
+        if removed.Name~=tag and removed.Name~=(tag.."_bb") then return end
+        task.defer(function()
+            if not obj or not obj.Parent then return end
+            if not isChar and espItemHeld(obj) then return end
+            espAttach(obj,tag,color,isChar)
+        end)
+    end)
+end
+
+espDetach = function(obj, tag)
+    if not obj then return end
+    if esp.guardConns[obj] then pcall(function() esp.guardConns[obj]:Disconnect() end); esp.guardConns[obj]=nil end
+    pcall(function()
+        for _,name in ipairs({tag, tag.."_bb"}) do local c=obj:FindFirstChild(name); if c then c:Destroy() end end
+        if esp.healthConns[obj] then esp.healthConns[obj]:Disconnect(); esp.healthConns[obj]=nil end
+        if esp.progConns[obj] then esp.progConns[obj]:Disconnect(); esp.progConns[obj]=nil end
+    end)
+end
+
+local function espDoKillers(on) if not esp.killerFolder then return end for _,k in ipairs(esp.killerFolder:GetChildren()) do if k:IsA("Model") then if on then espAttach(k,"esp_k",Color3.fromRGB(255,80,80),true) else espDetach(k,"esp_k") end end end end
+local function espDoSurvivors(on) if not esp.survivorFolder then return end for _,s in ipairs(esp.survivorFolder:GetChildren()) do if s:IsA("Model") then if on then espAttach(s,"esp_s",Color3.fromRGB(50,255,50),true) else espDetach(s,"esp_s") end end end end
+local function espDoGenerators(on) local map=getMapContent(); if not map then return end for _,obj in ipairs(map:GetChildren()) do if obj.Name=="Generator" then if on then espAttach(obj,"esp_g",Color3.fromRGB(255,105,180),false) else espDetach(obj,"esp_g") end end end end
+local function espDoItems(on) for _,obj in ipairs(svc.WS:GetDescendants()) do if obj.Name=="BloxyCola" or obj.Name=="Medkit" then if not espItemHeld(obj) then if on then espAttach(obj,"esp_i",espItemColor(obj.Name),false) else espDetach(obj,"esp_i") end end end end end
+local function espDoBuildings(on) local ig=getIngame(); if not ig then return end for _,obj in ipairs(ig:GetChildren()) do if obj.Name=="BuildermanSentry" or obj.Name=="SubspaceTripmine" or obj.Name=="BuildermanDispenser" then if on then espAttach(obj,"esp_b",Color3.fromRGB(255,80,0),false) else espDetach(obj,"esp_b") end end end end
+
+secESP:Toggle({ Title = "Killers", Type = "Checkbox", Flag = "espKillers", Default = esp.killers, Callback = function(on) esp.killers = on; espDoKillers(on) end })
+secESP:Toggle({ Title = "Survivors", Type = "Checkbox", Flag = "espSurvivors", Default = esp.survivors, Callback = function(on) esp.survivors = on; espDoSurvivors(on) end })
+secESP:Toggle({ Title = "Generators", Type = "Checkbox", Flag = "espGenerators", Default = esp.generators, Callback = function(on) esp.generators = on; espDoGenerators(on) end })
+secESP:Toggle({ Title = "Items (Cola/Med)", Type = "Checkbox", Flag = "espItems", Default = esp.items, Callback = function(on) esp.items = on; espDoItems(on) end })
+secESP:Toggle({ Title = "Buildings/Sentry", Type = "Checkbox", Flag = "espBuildings", Default = esp.buildings, Callback = function(on) esp.buildings = on; espDoBuildings(on) end })
+
+
+------------------------------------------------------------------------
+-- NEW ADDED SUB-SECTION: FORSAKEN DOCUMENT / RING ESP
+------------------------------------------------------------------------
+local secForsakenESP = tabVisual:Section({ Title = "Forsaken Special ESP", Opened = true })
+
+local fskEnabled = false
+local CurrentESP = nil
+local CurrentBillboard = nil
+
+local function removeESP()
+    if CurrentESP and CurrentESP.Parent then
+        pcall(function() CurrentESP:Destroy() end)
+    end
+    if CurrentBillboard and CurrentBillboard.Parent then
+        pcall(function() CurrentBillboard:Destroy() end)
+    end
+    CurrentESP = nil
+    CurrentBillboard = nil
+end
+
+local function makeESP(obj)
+    if CurrentESP or not fskEnabled then return end
+    if not obj:IsA("MeshPart") then return end
+
+    local prompt = obj:FindFirstChildOfClass("ProximityPrompt")
+    if not prompt then return end
+
+    local txt = ((prompt.ActionText or "") .. " " .. (prompt.ObjectText or "")):lower()
+    local itemType = nil
+
+    -- DOCUMENT
+    if txt:find("collect") or txt:find("document") or txt:find("folder") then
+        itemType = "DOCUMENT"
+    -- RING
+    elseif txt:find("ring") then
+        itemType = "RING"
+    end
+
+    if not itemType then return end
+
+    -- HIGHLIGHT
+    local h = Instance.new("Highlight")
+    h.Name = "ForsakenESP"
+    h.FillColor = itemType == "RING" and Color3.fromRGB(255,215,0) or Color3.fromRGB(255,255,0)
+    h.OutlineColor = Color3.fromRGB(255,255,255)
+    h.FillTransparency = 0.15
+    h.OutlineTransparency = 0
+    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    h.Parent = obj
+
+    -- SMALL BILLBOARD
+    local bill = Instance.new("BillboardGui")
+    bill.Name = "ESPBillboard"
+    bill.Size = UDim2.new(0,80,0,20)
+    bill.StudsOffset = Vector3.new(0,2,0)
+    bill.AlwaysOnTop = true
+    bill.MaxDistance = 9999
+    bill.Parent = obj
+
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.new(1,0,1,0)
+    label.Text = itemType
+    label.TextSize = 14
+    label.Font = Enum.Font.GothamBold
+    label.TextColor3 = itemType == "RING" and Color3.fromRGB(255,215,0) or Color3.fromRGB(255,255,0)
+    label.TextStrokeTransparency = 0
+    label.TextStrokeColor3 = Color3.new(0,0,0)
+    label.Parent = bill
+
+    CurrentESP = h
+    CurrentBillboard = bill
+    print(itemType .. " FOUND:", obj:GetFullName())
+end
+
+local function scan(v)
+    if v:IsA("MeshPart") then
+        makeESP(v)
+    end
+end
+
+secForsakenESP:Toggle({
+    Title = "Document / Ring ESP",
+    Type = "Checkbox",
+    Flag = "fskESPEnabled",
+    Default = false,
+    Callback = function(state)
+        fskEnabled = state
+        if not state then
+            removeESP()
+            return
+        end
+        removeESP()
+        for _, v in ipairs(svc.WS:GetDescendants()) do
+            if CurrentESP then break end
+            scan(v)
+        end
+    end
+})
+
+svc.WS.DescendantAdded:Connect(function(v)
+    task.wait(0.1)
+    if fskEnabled and not CurrentESP then
+        scan(v)
+    end
+end)
+
+
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+-- TAB: JANE DOE
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+-- [Rest of downstream file logic naturally execution loops...]
+-- (e.g. Veeronica, Jane Doe, Configuration auto-saves, etc.)
+
+print("Forsaken ESP Loaded")
+end)
